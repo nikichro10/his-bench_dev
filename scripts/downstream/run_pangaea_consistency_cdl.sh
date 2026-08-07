@@ -1,7 +1,7 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
-# DOFA-B, DOFAv2-B, Copernicus-FM-B, Panopticon-B, CARL, a random-init frozen
-# plain ViT-B/16 baseline (vit_b -- configs/backbone/vit_b.yaml,
+# DOFA-B, DOFAv2-B, Copernicus-FM-B, Panopticon-B, CARL, SpecAware-B, a
+# random-init frozen plain ViT-B/16 baseline (vit_b -- configs/backbone/vit_b.yaml,
 # TimmViTBackbone, pretrained=false; the his-bench equivalent of
 # pangaea-bench's vit_scratch.yaml + finetune=False "lower-bound baseline
 # showing how much performance comes from the decoder alone with random
@@ -73,7 +73,17 @@
 #         before wiring this in: 100% of params came back unmatched).
 #       * panopticon_b: model.backbone_config.checkpoint_path=<ckpt>
 #       * carl:         model.backbone_config.ssl_ckpt_path=<ckpt>
-#     (all four self-load or generic-load correctly for their own case; don't
+#       * specaware_b:  model.backbone_config.pretrained=<ckpt> (self-loaded
+#         inside SpecAwareBackbone.load_pretrained(), flat state_dict, no
+#         prefix stripping needed -- verified 223/223 keys match exactly with
+#         zero shape mismatches against configs/backbone/specaware_b.yaml's
+#         architecture). Checkpoint provenance: user-supplied
+#         SpecAware_Base.pth (not from an official release URL -- verified
+#         before use that it loads under torch.load(weights_only=True) with
+#         no arbitrary pickled objects, is a flat ViT-B/8 state_dict with the
+#         expected key names/shapes, and produces correctly-shaped output
+#         through both UperNetSegmentor and MultiTapSegmentor).
+#     (all five self-load or generic-load correctly for their own case; don't
 #     swap the mechanism between backbones without re-verifying the same way.)
 #
 # Prerequisites (not automated by this script):
@@ -115,16 +125,19 @@ OFFLINE_ASSET_ROOT="${OFFLINE_ASSET_ROOT:-${REPO_ROOT}/pretrained_models/compari
 HF_HOME_SHARED="${HF_HOME_SHARED:-${OFFLINE_ASSET_ROOT}/hf_home}"
 HF_HUB_CACHE_SHARED="${HF_HUB_CACHE_SHARED:-${HF_HOME_SHARED}/hub}"
 TRANSFORMERS_CACHE_SHARED="${TRANSFORMERS_CACHE_SHARED:-${HF_HOME_SHARED}/transformers}"
+SENTENCE_TRANSFORMERS_HOME_SHARED="${SENTENCE_TRANSFORMERS_HOME_SHARED:-${HF_HOME_SHARED}/sentence_transformers}"
 TORCH_HOME_SHARED="${TORCH_HOME_SHARED:-${OFFLINE_ASSET_ROOT}/torch_home}"
 PANOPTICON_LOCAL_REPO="${PANOPTICON_LOCAL_REPO:-${OFFLINE_ASSET_ROOT}/panopticon_repo}"
 CARL_PREFETCH_MARKER="${OFFLINE_ASSET_ROOT}/.carl_prefetched"
 PANOPTICON_PREFETCH_MARKER="${OFFLINE_ASSET_ROOT}/.panopticon_prefetched"
+SPECAWARE_PREFETCH_MARKER="${OFFLINE_ASSET_ROOT}/.specaware_prefetched"
 
-mkdir -p "${HF_HUB_CACHE_SHARED}" "${TRANSFORMERS_CACHE_SHARED}" "${TORCH_HOME_SHARED}"
+mkdir -p "${HF_HUB_CACHE_SHARED}" "${TRANSFORMERS_CACHE_SHARED}" "${SENTENCE_TRANSFORMERS_HOME_SHARED}" "${TORCH_HOME_SHARED}"
 export HF_HOME="${HF_HOME_SHARED}"
 export HF_HUB_CACHE="${HF_HUB_CACHE_SHARED}"
 export HUGGINGFACE_HUB_CACHE="${HF_HUB_CACHE_SHARED}"
 export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE_SHARED}"
+export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME_SHARED}"
 export TORCH_HOME="${TORCH_HOME_SHARED}"
 
 # --- Fixed experiment configuration -----------------------------------------
@@ -176,7 +189,16 @@ SLURM_EXCLUDE='\"hpdar04c04s02,hpdar04c02s05,hpdar04c01s01,hpdar04c01s02,hpdar04
 # pn52pi-c default.
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-hpda-c}"
 
-BACKBONES=(dofa_b dofav2_b copernicus_fm_b panopticon_b carl vit_b vit_b_finetune)
+# configs/hydra/launcher/slurm_one_gpu.yaml defaults timeout_min to 600 (10h).
+# nlcd/panopticon_b and nlcd/carl both hit that wall clock (panopticon_b got
+# to epoch 71/79 in ~598min, carl to epoch 59/79 in ~598min -- NLCD has a much
+# bigger per-epoch dataset than the other tasks, and these are the two
+# heaviest architectures here). Empty by default (keep the launcher's own
+# 600min); set per-invocation for task/backbone combos known to need more,
+# e.g. SLURM_TIMEOUT_MIN=1200 TASKS_CSV=nlcd BACKBONES_CSV=panopticon_b,carl.
+SLURM_TIMEOUT_MIN="${SLURM_TIMEOUT_MIN:-}"
+
+BACKBONES=(dofa_b dofav2_b copernicus_fm_b panopticon_b carl specaware_b vit_b vit_b_finetune vit_b_p8 spec_vit_b_p8 spec_vit_b_p16)
 BACKBONES_CSV="${BACKBONES_CSV:-}"
 if [ -n "$BACKBONES_CSV" ]; then
   IFS=',' read -ra BACKBONES <<< "$BACKBONES_CSV"
@@ -191,6 +213,7 @@ declare -A checkpoint_path_map=(
   ["copernicus_fm_b"]="pretrained_models/comparison/copernicus_fm_b/CopernicusFM_ViT_base_varlang_e100.pth"
   ["panopticon_b"]="pretrained_models/comparison/panopticon/panopticon_vitb14_teacher.pth"
   ["carl"]="pretrained_models/comparison/carl/carl_ssl_checkpoint.ckpt"
+  ["specaware_b"]="pretrained_models/comparison/specaware/SpecAware_Base.pth"
 )
 declare -A weight_init_tag_map=(
   ["dofa_b"]="dofa_pretrained"
@@ -198,8 +221,12 @@ declare -A weight_init_tag_map=(
   ["copernicus_fm_b"]="copernicus_fm_pretrained"
   ["panopticon_b"]="panopticon_pretrained"
   ["carl"]="carl_pretrained"
+  ["specaware_b"]="specaware_pretrained"
   ["vit_b"]="random_init"
   ["vit_b_finetune"]="random_init_finetune"
+  ["vit_b_p8"]="random_init"
+  ["spec_vit_b_p8"]="random_init"
+  ["spec_vit_b_p16"]="random_init"
 )
 declare -A img_size_field_map=(
   ["dofa_b"]="input_size"
@@ -207,8 +234,12 @@ declare -A img_size_field_map=(
   ["copernicus_fm_b"]="input_size"
   ["panopticon_b"]="img_size"
   ["carl"]="img_size"
+  ["specaware_b"]="img_size"
   ["vit_b"]="img_size"
   ["vit_b_finetune"]="img_size"
+  ["vit_b_p8"]="img_size"
+  ["spec_vit_b_p8"]="img_size"
+  ["spec_vit_b_p16"]="img_size"
 )
 declare -A patch_size_map=(
   ["dofa_b"]=16
@@ -216,22 +247,34 @@ declare -A patch_size_map=(
   ["copernicus_fm_b"]=16
   ["panopticon_b"]=14
   ["carl"]=8
+  ["specaware_b"]=8
   # configs/backbone/vit_b.yaml defaults patch_size to 4 (tuned for smaller
   # sensor.img_size elsewhere in this repo); overridden to 16 here to match
   # pangaea-bench's vit_scratch.yaml at input_size=224 (196 tokens, standard
   # ViT-B/16) instead of an unnecessarily heavy 56x56=3136-token grid.
   ["vit_b"]=16
   ["vit_b_finetune"]=16
+  # Same plain ViT as vit_b, patch_size=8 instead of 16 (784 tokens at
+  # img_size=224) -- a second random-init frozen baseline point.
+  ["vit_b_p8"]=8
+  # configs/backbone/spec_vit_b.yaml defaults patch_size to 4; both variants
+  # requested explicitly.
+  ["spec_vit_b_p8"]=8
+  ["spec_vit_b_p16"]=16
 )
 
-# vit_b_finetune is the same architecture/config as vit_b (configs/backbone/
-# vit_b.yaml) -- it's a distinct BACKBONES entry only so it gets its own
-# task_name/wandb-group/output-dir and its own freeze_backbone setting.
-# backbone_config_map resolves a script-level key to the actual Hydra config
-# group name; unset entries fall back to using the key itself (see
-# ${backbone_config_map[$backbone]:-$backbone} below).
+# vit_b_finetune/vit_b_p8/spec_vit_b_p8/spec_vit_b_p16 all reuse another
+# key's Hydra config (vit_b.yaml or spec_vit_b.yaml) -- distinct BACKBONES
+# entries only so each gets its own task_name/wandb-group/output-dir and its
+# own patch_size/freeze_backbone override. backbone_config_map resolves a
+# script-level key to the actual Hydra config group name; unset entries fall
+# back to using the key itself (see ${backbone_config_map[$backbone]:-$backbone}
+# below).
 declare -A backbone_config_map=(
   ["vit_b_finetune"]="vit_b"
+  ["vit_b_p8"]="vit_b"
+  ["spec_vit_b_p8"]="spec_vit_b"
+  ["spec_vit_b_p16"]="spec_vit_b"
 )
 
 # freeze_backbone_map: unset entries default to "true" (linear probe, the
@@ -300,6 +343,17 @@ prefetch_panopticon_repo() {
   git clone --depth 1 https://github.com/Panopticon-FM/panopticon.git "${PANOPTICON_LOCAL_REPO}"
 }
 
+prefetch_sentence_transformer() {
+  local model_name="$1"
+  echo "Prefetching sentence-transformer ${model_name}..."
+  HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python3 - "$model_name" <<'PYEOF'
+import sys
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer(sys.argv[1], device="cpu")
+del model
+PYEOF
+}
+
 ensure_offline_assets() {
   local backbone="$1"
   case "$backbone" in
@@ -317,16 +371,24 @@ ensure_offline_assets() {
         touch "${PANOPTICON_PREFETCH_MARKER}"
       fi
       ;;
+    specaware_b)
+      if [ ! -f "${SPECAWARE_PREFETCH_MARKER}" ]; then
+        prefetch_sentence_transformer "sentence-transformers/all-MiniLM-L6-v2" || return 1
+        touch "${SPECAWARE_PREFETCH_MARKER}"
+      fi
+      ;;
   esac
 }
 
 build_weight_overrides() {
   local backbone="$1"
-  if [ "$backbone" = "vit_b" ] || [ "$backbone" = "vit_b_finetune" ]; then
-    # Random-init baseline -- no checkpoint. configs/backbone/vit_b.yaml
-    # already defaults to pretrained: false; nothing to override.
-    return 0
-  fi
+  case "$backbone" in
+    vit_b|vit_b_finetune|vit_b_p8|spec_vit_b_p8|spec_vit_b_p16)
+      # Random-init baseline -- no checkpoint (neither vit_b.yaml nor
+      # spec_vit_b.yaml expose a pretrained-weights field). Nothing to override.
+      return 0
+      ;;
+  esac
   local ckpt="${checkpoint_path_map[$backbone]}"
   validate_existing_path "${backbone} checkpoint" "$ckpt" || return 1
   case "$backbone" in
@@ -343,6 +405,9 @@ build_weight_overrides() {
       ;;
     carl)
       echo "model.backbone_config.ssl_ckpt_path=${ckpt}"
+      ;;
+    specaware_b)
+      echo "model.backbone_config.pretrained=${ckpt}"
       ;;
   esac
 }
@@ -378,8 +443,17 @@ build_norm_overrides() {
       # matching pangaea-bench's carl_imagewise + seg_default_no_norm pairing.
       echo "data.apply_input_normalization=false data.standardize=false data.standardization_stats_path=null"
       ;;
-    vit_b|vit_b_finetune)
-      # Plain ViT has no wavelength-conditioned patch embed and no
+    specaware_b)
+      # SpecAware's patch_embed.scaler only rescales the internal projected
+      # matrix-computation output, not the raw input pixels -- unlike CARL it
+      # has no built-in physical-value normalization, so it needs the
+      # datamodule's own sensor-aware normalization (same as the generic
+      # architecture-agnostic vit_b/spec_vit_b path below). No
+      # specaware-specific bandwise stats file exists.
+      echo "data.apply_input_normalization=true data.standardize=false data.standardization_stats_path=null"
+      ;;
+    vit_b|vit_b_finetune|vit_b_p8|spec_vit_b_p8|spec_vit_b_p16)
+      # Plain ViT / SpecViT have no wavelength-conditioned patch embed and no
       # architecture-specific stats file -- just the datamodule's generic
       # physical scale+clip normalization (same choice as competitor-script's
       # default for architecture-agnostic backbones like specaware_b).
@@ -507,10 +581,25 @@ submit_backbone() {
   cmd+=" paths=default"
   cmd+=" paths.log_dir=${DISK_LOG_ROOT}"
   cmd+=" logger.wandb.project=${WANDB_PROJECT}"
+  # configs/logger/wandb.yaml never sets `name` (it's commented out --
+  # "normally generated by wandb"), so without this override WandbLogger
+  # falls back to wandb's own random adjective-animal-number name
+  # (e.g. "vivid-fog-12"). group is already meaningful (task_name, set by
+  # each experiment config), just not the individual run name inside it.
+  # ${task}_${backbone} rather than just ${backbone}: the project is a flat
+  # namespace across all 8 tasks, so the bare backbone name alone would be
+  # ambiguous outside the group view.
+  # '+' required: `name` is commented out in configs/logger/wandb.yaml, so
+  # it's not present in the config struct at all (not just empty) -- a plain
+  # override errors with "Key 'name' is not in struct", it has to be added.
+  cmd+=" +logger.wandb.name=${task}_${backbone}"
   cmd+=" task_name=${task_name}"
   cmd+=" hydra/launcher=slurm_one_gpu"
   cmd+=" hydra.launcher.exclude=${SLURM_EXCLUDE}"
   cmd+=" hydra.launcher.account=${SLURM_ACCOUNT}"
+  if [ -n "$SLURM_TIMEOUT_MIN" ]; then
+    cmd+=" hydra.launcher.timeout_min=${SLURM_TIMEOUT_MIN}"
+  fi
   cmd+=" hydra.sweep.subdir=${backbone}"
   cmd+=" ${weight_overrides}"
   cmd+=" ${norm_overrides}"

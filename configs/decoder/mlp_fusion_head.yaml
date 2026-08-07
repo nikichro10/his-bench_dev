@@ -1,0 +1,9 @@
+_target_: src.decoders.mlp_fusion_head.MLPFusionHead
+
+# in_channels_list is auto-inferred from the active backbone by
+# infer_multitap_decoder_info (see semantic_segmentation_module.py's
+# is_mlp_fusion branch) -- same mechanism as lightweight_multitap_head.
+in_channels_list: null
+num_classes: null  # Will be set by model config
+channels: 128  # Matches pangaea-bench's configs/decoder/seg_mlp_fusion.yaml
+upsample_mode: bilinear  # bilinear | bicubic | nearest | transposed_conv | pixel_shuffle
