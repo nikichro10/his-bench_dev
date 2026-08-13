@@ -19,9 +19,11 @@ ignore_value: -1.0
 invalid_value: -9999.0
 image_fill_value: 0.0
 
-# Patchify script output root. Keep it relative to the active paths profile so
-# JUWELS / Terrabyte can point at different storage locations cleanly.
-root: ${paths.data_dir}/oxhyperminerals_emit_l2a_author64_valid99
+# Patchify script output root. NOT under ${paths.data_dir} -- this dataset
+# lives in its own top-level location, confirmed to match the split files
+# already checked into data/splits/oxhyperminerals_emit_l2a/ (exact tile
+# counts: train=48792, val=12094, test=12373, matching metadata/dataset_summary.json).
+root: /dss/dsstbyfs02/pn49cu/pn49cu-dss-0001/oxhyperminerals_emit_l2a_author64_valid99
 split_root: data/splits
 
 apply_input_normalization: true

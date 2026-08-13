@@ -1,0 +1,13 @@
+_target_: src.backbones.universat_encoder.UniverSatBackbone
+sensor: ${data.sensor_config.name}
+sensor_config_name: ${data.sensor_config.name}
+hub_repo: pretrained_models/comparison/offline_assets/universat_repo
+hf_repo_id: g-astruc/UniverSat
+img_size: 224
+patch_size: 1
+latent_patch_size: 2
+num_features: 768
+compile: false
+pretrained: true
+modality_name: null
+subpatches: 1

@@ -146,6 +146,7 @@ class MultiLabelSegmentationModule(LightningModule):
         is_upernet = False
         is_multiscale_conv = False
         is_lightweight_multitap = False
+        is_mlp_fusion = False
         target = None
         if hasattr(self.decoder_config, "_target_"):
             target = self.decoder_config._target_
@@ -155,8 +156,9 @@ class MultiLabelSegmentationModule(LightningModule):
             is_upernet = "upernet" in target.lower()
             is_multiscale_conv = "multiscale_conv" in target.lower()
             is_lightweight_multitap = "lightweight_multitap" in target.lower()
+            is_mlp_fusion = "mlp_fusion" in target.lower()
 
-        if is_lightweight_multitap:
+        if is_lightweight_multitap or is_mlp_fusion:
             multitap_info = infer_multitap_decoder_info(
                 self.backbone,
                 tap_indices=self.tap_indices,
@@ -173,8 +175,12 @@ class MultiLabelSegmentationModule(LightningModule):
                 "in_channels_list": multitap_info["in_channels_list"],
                 "num_classes": self.num_classes,
             }
+            if is_mlp_fusion:
+                # Needed for upsample_mode in {transposed_conv, pixel_shuffle};
+                # harmless no-op for the default bilinear mode.
+                decoder_override_params["patch_size"] = self.vit_patch_size
             print(
-                "LightweightMultiTapSegHead: "
+                f"{'MLPFusionHead' if is_mlp_fusion else 'LightweightMultiTapSegHead'}: "
                 f"is_vit={self.multi_tap_is_vit}, taps={self.tap_indices}, "
                 f"in_channels={multitap_info['in_channels_list']}, "
                 f"probe_shape={multitap_info['probe_input_shape']}."
