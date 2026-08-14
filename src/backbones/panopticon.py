@@ -34,6 +34,7 @@ class PanopticonBackbone(nn.Module):
         output_layers: Optional[list[int]] = None,
         channel_id_mode: str = "floor_nm",
         trust_repo: Optional[bool] = None,
+        wave_list: Optional[dict[str, list[float]]] = None,
         **hub_kwargs: Any,
     ) -> None:
         super().__init__()
@@ -44,10 +45,14 @@ class PanopticonBackbone(nn.Module):
         self.output_layers = output_layers or [3, 5, 7, 11]
         self.channel_id_mode = str(channel_id_mode).lower()
 
-        sensor_cfg = SensorRegistry.get(self.sensor)
-        metadata = load_spectral_metadata(sensor_cfg, view="processed")
-        self.in_chans = metadata.num_bands
-        channel_ids = torch.tensor(metadata.band_centers_nm, dtype=torch.float32)
+        if wave_list is not None:
+            band_centers_nm = wave_list[self.sensor]
+        else:
+            sensor_cfg = SensorRegistry.get(self.sensor)
+            metadata = load_spectral_metadata(sensor_cfg, view="processed")
+            band_centers_nm = metadata.band_centers_nm
+        self.in_chans = len(band_centers_nm)
+        channel_ids = torch.tensor(band_centers_nm, dtype=torch.float32)
         if self.channel_id_mode in {"floor_nm", "int_nm", "official"}:
             # Panopticon's released dataset helpers cast gaussian.mu values to
             # int16, and the README examples use integer nm channel ids.

@@ -38,6 +38,7 @@ class EurocropsDataset(BaseSegmentationDataset):
         split_root: str = "data/splits",
         transforms: Optional[Callable[[dict[str, Tensor]], dict[str, Tensor]]] = None,
         raw_mask: bool = False,
+        band_indices: Optional[List[int]] = None,
     ) -> None:
         """Args:
             classes: Mandatory list of raw foreground class codes from the EuroCrops legend.
@@ -49,6 +50,7 @@ class EurocropsDataset(BaseSegmentationDataset):
             split_root: Root directory containing split files.
             transforms: Optional transforms to apply.
             raw_mask: If True, do not remap the mask (mask contains raw class values).
+            band_indices: Optional list of processed-band indices to subset to.
         """
         if not classes:
             raise ValueError("The 'classes' argument (list of foreground classes) is mandatory for EurocropsDataset and cannot be empty.")
@@ -65,6 +67,7 @@ class EurocropsDataset(BaseSegmentationDataset):
             classes=classes, # Pass the user's foreground classes directly
             transforms=transforms,
             raw_mask=raw_mask,
+            band_indices=band_indices,
         )
         # The base class __init__ now handles: 
         # - Setting self.foreground_classes_raw from 'classes' argument.

@@ -11,3 +11,4 @@ num_features: 768
 output_layers: [3, 5, 7, 11]
 channel_id_mode: floor_nm
 trust_repo: true
+wave_list: null  # Will be set by sensor config

@@ -115,6 +115,7 @@ class OxHyperMineralsEMITL2ADataset(NonGeoDataset):
         invalid_value: float = -9999.0,
         image_fill_value: float = 0.0,
         manifest_name: str = "patch_manifest.csv",
+        band_indices: Optional[list[int]] = None,
     ) -> None:
         self.root = _resolve_path(root)
         self.split = str(split)
@@ -136,6 +137,7 @@ class OxHyperMineralsEMITL2ADataset(NonGeoDataset):
         self.sensor = str(self.sensor_config.get("name", "emit"))
         self.num_bands = int(self.sensor_config.get("num_bands", 244))
         self.rgb_indices = list(self.sensor_config.get("rgb_indices", [45, 30, 15]))
+        self.band_indices = list(band_indices) if band_indices is not None else None
 
         if self.label_product not in LABEL_PRODUCT_CLASS_NAMES:
             raise ValueError(
@@ -209,6 +211,8 @@ class OxHyperMineralsEMITL2ADataset(NonGeoDataset):
             raise ValueError(
                 f"Expected {self.num_bands} bands for {path}, found {tensor.shape[0]}."
             )
+        if self.band_indices is not None:
+            tensor = tensor[self.band_indices, :, :]
         return tensor
 
     def _load_mask(self, path: Path) -> Tensor:

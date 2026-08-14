@@ -90,6 +90,7 @@ class BaseSegmentationDataModule(NonGeoDataModule):
         standardization_stats_path: Optional[str] = None,
         standardization_eps: float = 1.0e-6,
         post_projection_correction: Optional[Any] = None,
+        band_indices: Optional[Any] = None,
         **dataset_kwargs: Any,
     ) -> None:
         """
@@ -154,15 +155,19 @@ class BaseSegmentationDataModule(NonGeoDataModule):
         input_standardize_sensors = _to_plain_container(input_standardize_sensors)
         projection_standardize_sensors = _to_plain_container(projection_standardize_sensors)
         post_projection_correction = _to_plain_container(post_projection_correction)
+        band_indices = _to_plain_container(band_indices)
 
         # Initialize dataset args with sensor config
         dataset_init_args = {
             "sensor_config": sensor_config,  # Pass full config to dataset
             **dataset_kwargs
         }
-        
+        if band_indices is not None:
+            dataset_init_args["band_indices"] = band_indices
+
         super().__init__(dataset_class, batch_size, num_workers, **dataset_init_args)
         self.sensor_config = sensor_config
+        self.band_indices = band_indices
         self.target_sensor_config = target_sensor_config
         self.target_sensor_configs = self._resolve_target_sensor_configs(
             target_sensor_configs=target_sensor_configs,
@@ -362,6 +367,7 @@ class BaseSegmentationDataModule(NonGeoDataModule):
                 mode=self.standardization_mode,
                 eps=self.standardization_eps,
                 sensor_config=standardizer_sensor_cfg,
+                band_indices=self.band_indices,
             )
 
         self.train_aug = AugmentationSequential(

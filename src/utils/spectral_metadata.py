@@ -152,6 +152,44 @@ def load_spectral_metadata(
     return metadata
 
 
+BAND_GROUP_RANGES_NM: dict[str, tuple[float, float]] = {
+    "vis": (380.0, 700.0),
+    "vnir": (380.0, 1000.0),
+    "swir": (1000.0, 2600.0),
+}
+
+
+def resolve_band_group(
+    sensor_config: Mapping[str, Any],
+    group: str,
+) -> tuple[list[int], list[float]]:
+    """Resolve a named spectral-subset group to processed band indices + wavelengths.
+
+    Groups: "full" (all processed bands), "rgb" (sensor_config['rgb_indices']),
+    or a wavelength-range name from BAND_GROUP_RANGES_NM ("vis", "vnir", "swir").
+    Returns (band_indices, wavelengths_nm) aligned to the processed band view,
+    the same view used for the standardization stats and dataset tensors.
+    """
+    metadata = load_spectral_metadata(sensor_config, view="processed")
+    group_key = str(group).lower()
+    if group_key == "full":
+        indices = list(range(metadata.num_bands))
+    elif group_key == "rgb":
+        indices = [int(i) for i in sensor_config["rgb_indices"]]
+    elif group_key in BAND_GROUP_RANGES_NM:
+        lo, hi = BAND_GROUP_RANGES_NM[group_key]
+        indices = [
+            i for i, w in enumerate(metadata.band_centers_nm) if lo <= float(w) < hi
+        ]
+    else:
+        raise ValueError(
+            f"Unknown band group '{group}'. Expected one of "
+            f"{['full', 'rgb'] + list(BAND_GROUP_RANGES_NM)}."
+        )
+    wavelengths = [float(metadata.band_centers_nm[i]) for i in indices]
+    return indices, wavelengths
+
+
 def build_band_trim_transform(
     sensor_config: Mapping[str, Any],
     sensor_key: str = "image",

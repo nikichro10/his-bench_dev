@@ -169,6 +169,7 @@ class SingleSensorStandardizer(nn.Module):
         std: torch.Tensor,
         eps: float = 1e-6,
         sensor_config: Optional[Dict[str, Any]] = None,
+        band_indices: Optional[list] = None,
     ):
         super().__init__()
         if eps <= 0:
@@ -179,6 +180,9 @@ class SingleSensorStandardizer(nn.Module):
             std=std,
             sensor_config=sensor_config,
         )
+        if band_indices is not None and mean.ndim == 1:
+            index = torch.as_tensor(band_indices, dtype=torch.long)
+            mean, std = mean[index], std[index]
         self.register_buffer("mean", mean.clone().detach().float())
         self.register_buffer("std", std.clone().detach().float())
 
@@ -190,10 +194,11 @@ class SingleSensorStandardizer(nn.Module):
         mode: str = "bandwise",
         eps: float = 1e-6,
         sensor_config: Optional[Dict[str, Any]] = None,
+        band_indices: Optional[list] = None,
     ) -> "SingleSensorStandardizer":
         stats_file = _resolve_sensor_stats_file(stats_path=stats_path, sensor_name=sensor_name)
         mean, std = _extract_stats(stats_file=stats_file, sensor_name=sensor_name, mode=mode)
-        return cls(mean=mean, std=std, eps=eps, sensor_config=sensor_config)
+        return cls(mean=mean, std=std, eps=eps, sensor_config=sensor_config, band_indices=band_indices)
 
     def _reshape_stats(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         mean = self.mean.to(device=x.device, dtype=x.dtype)

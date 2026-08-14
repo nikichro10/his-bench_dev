@@ -35,6 +35,7 @@ class BaseSegmentationDataset(NonGeoDataset):
         classes: Optional[List[int]] = None, # User-specified raw foreground classes
         transforms: Optional[Callable[[Dict[str, Tensor]], Dict[str, Tensor]]] = None,
         raw_mask: bool = False,
+        band_indices: Optional[List[int]] = None,
     ) -> None:
         """Initialize the base segmentation dataset.
         Args:
@@ -60,7 +61,8 @@ class BaseSegmentationDataset(NonGeoDataset):
         self.num_bands = sensor_config.get("num_bands", -1)
         self.load_num_bands = self._resolve_load_num_bands(sensor_config)
         self.rgb_indices = sensor_config.get("rgb_indices", [0, 1, 2])
-        
+        self.band_indices = list(band_indices) if band_indices is not None else None
+
         self.product = product
         self.split = split
         self.split_root = split_root
@@ -221,6 +223,9 @@ class BaseSegmentationDataset(NonGeoDataset):
             #     # raise ValueError(f"Image {path} has {tensor_image.shape[0]} bands, expected {self.num_bands}.")
         elif self.load_num_bands == -1:
             self.load_num_bands = tensor_image.shape[0] # Auto-detect num_bands from first image
+
+        if self.band_indices is not None:
+            tensor_image = tensor_image[self.band_indices, :, :]
 
         return tensor_image
 
