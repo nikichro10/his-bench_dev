@@ -211,7 +211,7 @@ declare -A band_common_map
 declare -A wave_nm_map
 declare -A wave_um_map
 declare -A bandwidth_nm_map
-while IFS=$'\t' read -r sensor group common wl_nm wl_um bw_nm; do
+while IFS=$'\t' read -r sensor group band_count common wl_nm wl_um bw_nm; do
   band_common_map["${sensor}_${group}"]="$common"
   wave_nm_map["${sensor}_${group}"]="$wl_nm"
   wave_um_map["${sensor}_${group}"]="$wl_um"

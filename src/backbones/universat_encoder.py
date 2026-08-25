@@ -60,6 +60,7 @@ class UniverSatBackbone(nn.Module):
         modality_name: Optional[str] = None,
         subpatches: int = 1,
         trust_repo: Optional[bool] = None,
+        wave_list: Optional[dict[str, list[float]]] = None,
     ) -> None:
         super().__init__()
         self.sensor = str(sensor_config_name or sensor).lower()
@@ -83,10 +84,18 @@ class UniverSatBackbone(nn.Module):
         self.num_features = int(num_features)
 
         sensor_cfg = SensorRegistry.get(self.sensor)
-        metadata = load_spectral_metadata(sensor_cfg, view="processed")
-        self.in_chans = metadata.num_bands
-        # UniverSat's spectral Fourier embedding expects micrometers.
-        self.wavelengths_um = [c / 1000.0 for c in metadata.band_centers_nm]
+        # UniverSat's spectral Fourier embedding expects micrometers. An
+        # explicit wave_list override is used AS-IS (already in micrometers,
+        # same convention as dofa_b/dofav2_b/carl's own explicit-override
+        # path) -- lets a band subset restrict this backbone the same way as
+        # every other wave_list-capable one, instead of always deriving the
+        # full sensor's band count from SensorRegistry.
+        if wave_list is not None:
+            self.wavelengths_um = wave_list[self.sensor]
+        else:
+            metadata = load_spectral_metadata(sensor_cfg, view="processed")
+            self.wavelengths_um = [c / 1000.0 for c in metadata.band_centers_nm]
+        self.in_chans = len(self.wavelengths_um)
         self.input_res_m = float(sensor_cfg.get("resolution", 30.0))
         self.subpatches = int(subpatches)
         # Dict-key label only (see class docstring) -- reusing the sensor

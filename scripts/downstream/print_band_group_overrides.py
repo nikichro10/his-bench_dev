@@ -51,7 +51,14 @@ bandwidth_list field, so passing it would hit the same "not in struct"
 error +data.band_indices needed a + for.
 
 Output: one TAB-separated line per (sensor, group) combo:
-    <sensor>\\t<group>\\t<common overrides>\\t<wave_list override, nm>\\t<wave_list override, um>\\t<bandwidth_list override, nm>
+    <sensor>\\t<group>\\t<band_count>\\t<common overrides>\\t<wave_list override, nm>\\t<wave_list override, um>\\t<bandwidth_list override, nm>
+
+band_count is the same number embedded in the "common" override's
+model.probe_in_chans -- exposed as its own field so callers that need it
+directly (e.g. run_vit_b_band_ablation.sh's model.backbone_config.in_chans
+override -- vit_b has no wave_list, so this is the only way it learns its
+input channel count) don't have to parse it back out of that string. Mirrors
+the same field print_random_band_overrides.py exposes.
 
 Each wave_list/bandwidth_list override is wrapped in real (unescaped) double
 quotes so that, after being captured into a bash variable and later
@@ -145,4 +152,4 @@ for sensor in SENSOR_YAML_PATHS:
         wl_nm = wave_list_override(sensor, group_wavelengths, "nm")
         wl_um = wave_list_override(sensor, group_wavelengths, "um")
         bw_nm = _dict_list_override("bandwidth_list", sensor, group_widths)
-        print(f"{sensor}\t{group}\t{common}\t{wl_nm}\t{wl_um}\t{bw_nm}")
+        print(f"{sensor}\t{group}\t{len(indices)}\t{common}\t{wl_nm}\t{wl_um}\t{bw_nm}")

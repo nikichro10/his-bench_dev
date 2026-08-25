@@ -11,3 +11,4 @@ compile: false
 pretrained: true
 modality_name: null
 subpatches: 1
+wave_list: null  # Will be set by sensor config
