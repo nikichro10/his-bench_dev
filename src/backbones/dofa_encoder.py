@@ -39,6 +39,28 @@ def get_1d_sincos_pos_embed_from_grid_torch(embed_dim, pos):
     return emb
 
 
+def get_2d_sincos_pos_embed_torch(embed_dim, grid_size, cls_token=True):
+    """Standard MAE-style 2D sin-cos positional embedding -- deterministic,
+    not learned (matches self.pos_embed's requires_grad=False). Computed here
+    at construction time so pos_embed has a real value even when no
+    pretrained checkpoint is loaded; previously it was left a permanent zero
+    buffer that only ever got a real value via a checkpoint's saved
+    state_dict, which silently broke any random-init (no-checkpoint) use of
+    this encoder -- the pretrained path is unaffected, since a loaded
+    checkpoint's own pos_embed always overwrites this one."""
+    grid_h = torch.arange(grid_size, dtype=torch.float32)
+    grid_w = torch.arange(grid_size, dtype=torch.float32)
+    grid = torch.meshgrid(grid_w, grid_h, indexing="ij")
+    grid = torch.stack(grid, dim=0).reshape(2, 1, grid_size, grid_size)
+
+    emb_h = get_1d_sincos_pos_embed_from_grid_torch(embed_dim // 2, grid[0])
+    emb_w = get_1d_sincos_pos_embed_from_grid_torch(embed_dim // 2, grid[1])
+    pos_embed = torch.cat([emb_h, emb_w], dim=1)
+    if cls_token:
+        pos_embed = torch.cat([torch.zeros(1, embed_dim), pos_embed], dim=0)
+    return pos_embed
+
+
 class TransformerWeightGenerator(nn.Module):
     def __init__(self, input_dim, output_dim, embed_dim, num_heads=4, num_layers=1):
         super(TransformerWeightGenerator, self).__init__()
@@ -143,6 +165,19 @@ class Dynamic_MLP_OFA(nn.Module):
         self.weight_generator.apply(self.weight_init)
         self.fclayer.apply(self.weight_init)
 
+    def reinit_hypernetwork(self):
+        """Reinitialize ALL of the hypernetwork's own learnable parameters
+        (weight_generator + fclayer's Linear layers, plus weight_generator's
+        weight_tokens/bias_token, which _init_weights() alone doesn't reach
+        since they're raw nn.Parameters, not nn.Linear submodules) with the
+        exact same standard init used at construction time -- used by the
+        reinit-hypernetwork ablation to test whether the *learned* per-band
+        weight-generation mapping matters, independent of whether the
+        wavelength it's given is correct."""
+        self._init_weights()
+        torch.nn.init.normal_(self.weight_generator.weight_tokens, std=0.02)
+        torch.nn.init.normal_(self.weight_generator.bias_token, std=0.02)
+
     def forward(self, img_feat, wvs):
         inplanes = wvs.size(0)
 
@@ -218,6 +253,7 @@ class DOFA_Encoder(Encoder):
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
         sensor="enmap",
         sensor_config_name: Optional[str] = None,
+        reinit_weight_generator: bool = False,
     ):
         super().__init__(
             model_name="dofa_encoder",
@@ -236,6 +272,7 @@ class DOFA_Encoder(Encoder):
         self.img_size = input_size
         self.wv_planes = wv_planes
         self.wave_list = wave_list
+        self.reinit_weight_generator = reinit_weight_generator
         self.return_all_tokens = return_all_tokens
         self.embed_dim = embed_dim
         self.patch_size = patch_size
@@ -257,9 +294,11 @@ class DOFA_Encoder(Encoder):
         )
         self.num_patches = (self.img_size // patch_size) ** 2
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        grid_size = self.img_size // patch_size
         self.pos_embed = nn.Parameter(
-            torch.zeros(1, self.num_patches + 1, embed_dim), requires_grad=False
-        )  # fixed sin-cos embedding
+            get_2d_sincos_pos_embed_torch(embed_dim, grid_size, cls_token=True).unsqueeze(0),
+            requires_grad=False,
+        )  # fixed sin-cos embedding (real value -- see get_2d_sincos_pos_embed_torch's docstring)
 
         self.blocks = nn.ModuleList(
             [
@@ -394,6 +433,18 @@ class DOFA_Encoder(Encoder):
             return tuple(zip(output, prefix_output))
         return output            
         
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        """Overridden so the reinit-hypernetwork ablation reinitializes
+        patch_embed's weight-generator AFTER any pretrained weights land,
+        regardless of which code path loads them (the generic
+        model_utils.load_pretrained_weights() utility, or
+        load_encoder_weights() below) -- reiniting inside __init__ wouldn't
+        survive a later pretrained-weight load."""
+        result = super().load_state_dict(state_dict, *args, **kwargs)
+        if self.reinit_weight_generator:
+            self.patch_embed.reinit_hypernetwork()
+        return result
+
     def load_encoder_weights(self, logger: Logger) -> None:
         print("Loading encoder weights")
         pretrained_model = torch.load(self.encoder_weights, map_location="cpu")

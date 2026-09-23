@@ -40,6 +40,7 @@ class BDForetDataset(BaseSegmentationDataset):
         split_root: str = "data/splits",
         transforms: Optional[Callable[[dict[str, Tensor]], dict[str, Tensor]]] = None,
         raw_mask: bool = False,
+        band_indices: Optional[List[int]] = None,
     ) -> None:
         """Args:
             classes: List of raw foreground class codes (e.g., from BDForet legend).
@@ -51,6 +52,7 @@ class BDForetDataset(BaseSegmentationDataset):
             split_root: Root directory containing split files.
             transforms: Optional transforms to apply.
             raw_mask: If True, do not remap the mask.
+            band_indices: Optional list of processed-band indices to subset to.
         """
         if not classes:
             raise ValueError("The 'classes' argument (list of foreground classes) is mandatory for BDForetDataset and cannot be empty.")
@@ -67,6 +69,7 @@ class BDForetDataset(BaseSegmentationDataset):
             classes=classes,
             transforms=transforms,
             raw_mask=raw_mask,
+            band_indices=band_indices,
         )
 
     # Core data handling methods inherited from BaseSegmentationDataset

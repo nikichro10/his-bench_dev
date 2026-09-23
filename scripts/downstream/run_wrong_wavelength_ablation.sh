@@ -12,13 +12,30 @@
 # a backbone's wavelength conditioning is actually load-bearing or just a
 # fixed per-channel embedding it could equally have learned positionally.
 #
-# Two conditions (see print_wrong_wavelength_overrides.py's header for the
+# Five conditions (see print_wrong_wavelength_overrides.py's header for the
 # exact construction):
 #   - wrong_permuted_s0/s1/s2: the true wavelength VALUES, randomly
 #     reassigned across bands (3 seeds, so a headline effect isn't resting on
-#     one lucky/unlucky shuffle).
+#     one lucky/unlucky shuffle). Pixel DATA stays in original band order --
+#     only the label is wrong.
 #   - wrong_constant: every band told the sensor's median true wavelength --
 #     removes all cross-channel differentiation from the signal entirely.
+#   - wrong_jitter_s0: a milder, more realistic corruption -- each band keeps
+#     its OWN true wavelength, nudged by an independently-drawn perturbation
+#     (magnitude uniform in [20,50]nm, random sign per band). Tests
+#     calibration-drift-sized noise rather than gross misidentification. Only
+#     1 seed for now (per explicit instruction), unlike wrong_permuted's 3.
+#   - wrong_jitter_50_100_s0: same construction as wrong_jitter_s0, but with
+#     the per-band offset magnitude doubled to [50,100]nm -- tests whether
+#     the near-total tolerance of the smaller jitter range degrades once the
+#     noise gets larger. Only 1 seed for now, same as wrong_jitter_s0.
+#   - shuffled_s0: a different question from the three above -- reuses
+#     wrong_permuted_s0's exact permutation, but now shuffles the pixel DATA
+#     by that same permutation too (via a `+data.band_indices=<perm>`
+#     override, unlike the other three conditions), so the (data, wavelength)
+#     pairing at every position stays CORRECT, just reordered. Tests whether
+#     the backbone needs canonical band order even when told the truth at
+#     every position. Only 1 seed for now.
 # "full" (correct wave_list) is NOT resubmitted here -- it's the existing
 # baseline, reused as the control condition during analysis.
 #
@@ -33,11 +50,15 @@
 # Caught via an end-to-end test before mass submission (see
 # print_wrong_wavelength_overrides.py's header for the full story).
 #
-# Same 5 backbones/decoder/protocol/tasks as run_wavelength_ablation.sh:
-# dofa_b, dofav2_b, copernicus_fm_b, panopticon_b, carl -- mlp_fusion_head,
-# frozen linear probe, oxhyperminerals_emit_l2a/eurocrops/bnetd. UniverSat is
-# handled by the separate run_wrong_wavelength_universat.sh script, same
-# split rationale as every other ablation script in this benchmark.
+# Same 5 backbones/decoder/protocol as run_wavelength_ablation.sh: dofa_b,
+# dofav2_b, copernicus_fm_b, panopticon_b, carl -- mlp_fusion_head, frozen
+# linear probe. Tasks: oxhyperminerals_emit_l2a/eurocrops/bnetd, plus
+# bdforet (added later, same EnMAP sensor as eurocrops/bnetd -- see
+# run_small_band_ablation.sh's task_sensor_map for the established
+# convention; no task_extra_overrides_map entry needed, same as
+# eurocrops/bnetd). UniverSat is handled by the separate
+# run_wrong_wavelength_universat.sh script, same split rationale as every
+# other ablation script in this benchmark.
 #
 # Output paths / wandb names get an extra "/${condition}" segment (e.g.
 # "wrong_constant"), parallel to run_wavelength_ablation.sh's "/${group}".
@@ -88,13 +109,13 @@ export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME_SHARED}"
 export TORCH_HOME="${TORCH_HOME_SHARED}"
 
 # --- Fixed experiment configuration -----------------------------------------
-TASKS=(oxhyperminerals_emit_l2a eurocrops bnetd)
+TASKS=(oxhyperminerals_emit_l2a eurocrops bnetd bdforet)
 TASKS_CSV="${TASKS_CSV:-}"
 if [ -n "$TASKS_CSV" ]; then
   IFS=',' read -ra TASKS <<< "$TASKS_CSV"
 fi
 
-CONDITIONS=(wrong_permuted_s0 wrong_permuted_s1 wrong_permuted_s2 wrong_constant)
+CONDITIONS=(wrong_permuted_s0 wrong_permuted_s1 wrong_permuted_s2 wrong_constant wrong_jitter_s0 wrong_jitter_50_100_s0 shuffled_s0)
 CONDITIONS_CSV="${CONDITIONS_CSV:-}"
 if [ -n "$CONDITIONS_CSV" ]; then
   IFS=',' read -ra CONDITIONS <<< "$CONDITIONS_CSV"
@@ -110,6 +131,7 @@ declare -A task_sensor_map=(
   ["oxhyperminerals_emit_l2a"]="emit"
   ["eurocrops"]="enmap"
   ["bnetd"]="enmap"
+  ["bdforet"]="enmap"
 )
 declare -A task_extra_overrides_map=(
   ["oxhyperminerals_emit_l2a"]="data=oxhyperminerals_emit_l2a_10pct model.num_classes=3"
@@ -189,10 +211,12 @@ echo "Resolving wrong-wavelength overrides..."
 declare -A wave_nm_map
 declare -A wave_um_map
 declare -A bandwidth_nm_map
-while IFS=$'\t' read -r sensor condition wl_nm wl_um bw_nm; do
+declare -A band_indices_map
+while IFS=$'\t' read -r sensor condition wl_nm wl_um bw_nm band_idx; do
   wave_nm_map["${sensor}_${condition}"]="$wl_nm"
   wave_um_map["${sensor}_${condition}"]="$wl_um"
   bandwidth_nm_map["${sensor}_${condition}"]="$bw_nm"
+  band_indices_map["${sensor}_${condition}"]="$band_idx"
 done < <(python3 "${REPO_ROOT}/scripts/downstream/print_wrong_wavelength_overrides.py")
 
 for sensor in emit enmap; do
@@ -344,7 +368,7 @@ submit_backbone() {
     return 1
   }
 
-  local weight_overrides norm_overrides tap_overrides wave_unit wave_overrides bandwidth_overrides
+  local weight_overrides norm_overrides tap_overrides wave_unit wave_overrides bandwidth_overrides band_indices_overrides
   weight_overrides=$(build_weight_overrides "$backbone") || return 1
   norm_overrides=$(build_norm_overrides "$backbone" "$sensor") || return 1
   tap_overrides=$(build_tap_overrides "$backbone")
@@ -361,6 +385,9 @@ submit_backbone() {
   if [ "$backbone" = "copernicus_fm_b" ]; then
     bandwidth_overrides="${bandwidth_nm_map[${sensor}_${condition}]}"
   fi
+  # Only shuffled_s0 has a non-empty band_indices entry -- the other
+  # conditions never reorder pixel data, only the wavelength label.
+  band_indices_overrides="${band_indices_map[${sensor}_${condition}]}"
 
   local patch_size="${patch_size_map[$backbone]}"
   local img_size_field="${img_size_field_map[$backbone]}"
@@ -407,6 +434,9 @@ submit_backbone() {
   cmd+=" ${wave_overrides}"
   if [ -n "$bandwidth_overrides" ]; then
     cmd+=" ${bandwidth_overrides}"
+  fi
+  if [ -n "$band_indices_overrides" ]; then
+    cmd+=" ${band_indices_overrides}"
   fi
   if [ -n "$extra_overrides" ]; then
     cmd+=" ${extra_overrides}"

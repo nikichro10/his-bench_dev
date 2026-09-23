@@ -1,0 +1,7 @@
+_target_: src.decoders.unet_decoder.UNetDecoder
+
+# Must match the paired unet_b backbone's topology.
+topology: [64, 128, 256, 512]
+
+# Set dynamically by the model
+num_classes: null  # Will be set by model config

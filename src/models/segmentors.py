@@ -537,9 +537,25 @@ class FCNSegmentor(nn.Module):
         return F.interpolate(output, size=input_shape, mode="bilinear", align_corners=False)
 
 
+class UNetSegmentor(nn.Module):
+    """Fully-supervised UNet: pairs UNetBackbone's multi-scale pyramid with
+    UNetDecoder's skip-connection upsampling path. No get_intermediate_layers
+    indirection -- the backbone already returns the pyramid list directly."""
+
+    def __init__(self, backbone: nn.Module, decoder: nn.Module):
+        super().__init__()
+        self.encoder = backbone
+        self.decoder = decoder
+
+    def forward(self, x: Tensor, output_size: Optional[Sequence[int]] = None) -> Tensor:
+        features = self.encoder(x)
+        output = self.decoder(features)
+        return _match_input_spatial_size(output, x, output_size)
+
+
 class ClassificationModel(nn.Module):
     """Classification model that combines backbone with classification head."""
-    
+
     def __init__(self, backbone: nn.Module, decoder: nn.Module):
         super().__init__()
         self.encoder = backbone

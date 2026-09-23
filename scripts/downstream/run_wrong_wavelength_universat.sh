@@ -6,13 +6,24 @@
 # UniverSat out from run_random_band_ablation.sh (different decoder/
 # model_type/img_size -- see that script's header for the full rationale).
 #
-# Same two conditions as run_wrong_wavelength_ablation.sh (see
+# Same five conditions as run_wrong_wavelength_ablation.sh (see
 # print_wrong_wavelength_overrides.py's header for the exact construction):
 # wrong_permuted_s0/s1/s2 (true wavelength values, randomly reassigned across
-# bands) and wrong_constant (every band told the sensor's median true
-# wavelength). Full band count throughout -- no data.band_indices/
-# probe_in_chans override (UniverSat's ConvSegmentor doesn't need the latter
-# anyway, see run_random_band_universat.sh's header).
+# bands), wrong_constant (every band told the sensor's median true
+# wavelength), wrong_jitter_s0 (each band keeps its own true wavelength,
+# nudged by an independently-drawn perturbation, magnitude uniform in
+# [20,50]nm, random sign per band -- only 1 seed for now),
+# wrong_jitter_50_100_s0 (identical construction, magnitude doubled to
+# [50,100]nm -- only 1 seed for now), and shuffled_s0 (reuses
+# wrong_permuted_s0's exact permutation, but reorders the pixel DATA by it
+# too via a `+data.band_indices=<perm>` override, so the (data, wavelength)
+# pairing at every position stays CORRECT, just reordered -- only 1 seed for
+# now). Every condition except shuffled_s0 uses the full, untouched band
+# count/order -- no data.band_indices/probe_in_chans override (UniverSat's
+# ConvSegmentor doesn't need the latter anyway, see
+# run_random_band_universat.sh's header). shuffled_s0 is the one exception
+# and needs a +data.band_indices override, same mechanism
+# run_random_band_universat.sh already uses for subset selection.
 #
 # wave_list override reuses the same um-only mechanism
 # run_random_band_universat.sh already validated for UniverSat
@@ -21,8 +32,13 @@
 # img_size stays per-sensor NATIVE (64 for EMIT, 128 for EnMAP), same
 # deliberate choice as every other UniverSat script in this benchmark.
 #
-# Only 1 "backbone" (UniverSat itself), so this is TASKS x CONDITIONS = 12
-# runs total, not TASKS x CONDITIONS x BACKBONES.
+# Only 1 "backbone" (UniverSat itself), so this is TASKS x CONDITIONS = 21
+# runs total, not TASKS x CONDITIONS x BACKBONES. bdforet was tried here
+# briefly but hit submitit's requeue ceiling repeatedly even at a 36h
+# per-attempt timeout and was dropped from scope for UniverSat specifically
+# (excluded from the thesis) -- run_wrong_wavelength_ablation.sh's 5
+# mlp_fusion_head-capable encoders still cover bdforet normally, this script
+# doesn't.
 #
 # NOT SUBMITTED YET as of writing -- written ahead of time while the
 # random-band-ablation batch (n20 size + vit_b baseline, ~107 jobs) is still
@@ -73,7 +89,7 @@ if [ -n "$TASKS_CSV" ]; then
   IFS=',' read -ra TASKS <<< "$TASKS_CSV"
 fi
 
-CONDITIONS=(wrong_permuted_s0 wrong_permuted_s1 wrong_permuted_s2 wrong_constant)
+CONDITIONS=(wrong_permuted_s0 wrong_permuted_s1 wrong_permuted_s2 wrong_constant wrong_jitter_s0 wrong_jitter_50_100_s0 shuffled_s0)
 CONDITIONS_CSV="${CONDITIONS_CSV:-}"
 if [ -n "$CONDITIONS_CSV" ]; then
   IFS=',' read -ra CONDITIONS <<< "$CONDITIONS_CSV"
@@ -83,11 +99,13 @@ declare -A task_sensor_map=(
   ["oxhyperminerals_emit_l2a"]="emit"
   ["eurocrops"]="enmap"
   ["bnetd"]="enmap"
+  ["bdforet"]="enmap"
 )
 declare -A task_img_size_map=(
   ["oxhyperminerals_emit_l2a"]=64
   ["eurocrops"]=128
   ["bnetd"]=128
+  ["bdforet"]=128
 )
 declare -A task_extra_overrides_map=(
   ["oxhyperminerals_emit_l2a"]="data=oxhyperminerals_emit_l2a_10pct model.num_classes=3"
@@ -133,8 +151,10 @@ declare -A dofa_family_stats_path_map=(
 # --- Precompute wrong-wavelength overrides (once) ----------------------------
 echo "Resolving wrong-wavelength overrides..."
 declare -A wave_um_map
-while IFS=$'\t' read -r sensor condition wl_nm wl_um bw_nm; do
+declare -A band_indices_map
+while IFS=$'\t' read -r sensor condition wl_nm wl_um bw_nm band_idx; do
   wave_um_map["${sensor}_${condition}"]="$wl_um"
+  band_indices_map["${sensor}_${condition}"]="$band_idx"
 done < <(python3 "${REPO_ROOT}/scripts/downstream/print_wrong_wavelength_overrides.py")
 
 for sensor in emit enmap; do
@@ -229,9 +249,12 @@ submit_job() {
     return 1
   }
 
-  local norm_overrides wave_overrides
+  local norm_overrides wave_overrides band_indices_overrides
   norm_overrides=$(build_norm_overrides "$sensor") || return 1
   wave_overrides="${wave_um_map[${sensor}_${condition}]}"
+  # Only shuffled_s0 has a non-empty band_indices entry -- the other
+  # conditions never reorder pixel data, only the wavelength label.
+  band_indices_overrides="${band_indices_map[${sensor}_${condition}]}"
 
   local task_name="downstream/${experiment_setup}/${sensor}/${DECODER}/${BACKBONE}/${PROTOCOL}/${WEIGHT_INIT}/${condition}"
   local extra_overrides="${task_extra_overrides_map[$task]:-}"
@@ -273,6 +296,9 @@ submit_job() {
   cmd+=" hydra.sweep.subdir=${BACKBONE}_${condition}"
   cmd+=" ${norm_overrides}"
   cmd+=" ${wave_overrides}"
+  if [ -n "$band_indices_overrides" ]; then
+    cmd+=" ${band_indices_overrides}"
+  fi
   if [ -n "$extra_overrides" ]; then
     cmd+=" ${extra_overrides}"
   fi

@@ -29,6 +29,7 @@ from einops import rearrange
 from timm.models.vision_transformer import Block
 
 from ..backbones.base import Encoder
+from src.backbones.dofa_encoder import get_2d_sincos_pos_embed_torch
 from src.backbones.specaware import FourierExpansion
 from src.utils.sensor_registry import SensorRegistry
 from src.utils.spectral_metadata import load_spectral_metadata
@@ -186,6 +187,19 @@ class _DynamicMLPSpectral(nn.Module):
         self.weight_generator.apply(weight_init)
         self.fclayer.apply(weight_init)
 
+    def reinit_hypernetwork(self):
+        """Reinitialize ALL of the hypernetwork's own learnable parameters
+        (weight_generator + fclayer's Linear layers, plus weight_generator's
+        weight_tokens/bias_token, which _init_weights() alone doesn't reach
+        since they're raw nn.Parameters, not nn.Linear submodules) with the
+        exact same standard init used at construction time -- see
+        Dynamic_MLP_OFA.reinit_hypernetwork() in dofa_encoder.py (identical
+        rationale/construction, kept separate here since this class has its
+        own private weight_init closure rather than a shared method)."""
+        self._init_weights()
+        torch.nn.init.normal_(self.weight_generator.weight_tokens, std=0.02)
+        torch.nn.init.normal_(self.weight_generator.bias_token, std=0.02)
+
     def forward(self, img_feat, wvs, bandwidths, kernel_size=None):
         """
         Args:
@@ -255,9 +269,15 @@ class _CopernicusFMViT(nn.Module):
         )
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         # Fixed sin-cos-style positional embedding (interpolated at runtime,
-        # not trained directly -- matches the official checkpoint).
+        # not trained directly -- matches the official checkpoint). Computed
+        # as a real value here (not left as a permanent zero buffer) so it's
+        # meaningful even without loading a pretrained checkpoint -- see
+        # get_2d_sincos_pos_embed_torch's docstring in dofa_encoder.py; a
+        # loaded checkpoint's own pos_embed still overwrites this either way.
+        grid_size = img_size // patch_size
         self.pos_embed = nn.Parameter(
-            torch.zeros(1, self.num_patches + 1, embed_dim), requires_grad=False,
+            get_2d_sincos_pos_embed_torch(embed_dim, grid_size, cls_token=True).unsqueeze(0),
+            requires_grad=False,
         )
 
         # Metadata positional encodings (lon/lat, area, time)
@@ -439,6 +459,7 @@ class CopernicusFM_Encoder(Encoder):
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
         sensor: str = "enmap",
         sensor_config_name: Optional[str] = None,
+        reinit_weight_generator: bool = False,
     ):
         super().__init__(
             model_name="copernicus_fm_encoder",
@@ -495,6 +516,15 @@ class CopernicusFM_Encoder(Encoder):
         # remap in load_encoder_weights() always runs.
         if encoder_weights is not None:
             self.load_encoder_weights(logging.getLogger(__name__))
+
+        # Reinit-hypernetwork ablation: overwrite patch_embed's own
+        # weight-generator parameters (just loaded above from the pretrained
+        # checkpoint) with a fresh standard init -- see
+        # _DynamicMLPSpectral.reinit_hypernetwork()'s docstring. Placed here
+        # (not gated behind `encoder_weights is not None`) so it also applies
+        # cleanly if this is ever constructed without a checkpoint.
+        if reinit_weight_generator:
+            self.model.patch_embed.reinit_hypernetwork()
 
     def _meta_info(self, batch_size: int, device) -> torch.Tensor:
         return torch.full((batch_size, 4), float("nan"), device=device)

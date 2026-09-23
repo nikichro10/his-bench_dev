@@ -14,6 +14,7 @@ from .segmentors import (
     LearnableMultiScaleConvSegmentor,
     MultiScaleConvSegmentor,
     MultiTapSegmentor,
+    UNetSegmentor,
     UperNetSegmentor,
     _backbone_looks_hierarchical,
     _default_vit_taps_from_backbone,
@@ -288,7 +289,7 @@ def create_model(
     Args:
         backbone: Instantiated backbone module.
         decoder: Instantiated decoder module.
-        model_type: Type of model to create ("vit_seg", "conv_seg", "fcn_seg", "upernet_seg", "classification").
+        model_type: Type of model to create ("vit_seg", "conv_seg", "fcn_seg", "upernet_seg", "unet_seg", "classification").
         patch_size: Patch size for ViT segmentation.
         
     Returns:
@@ -312,6 +313,8 @@ def create_model(
         return FCNSegmentor(backbone, decoder)
     elif model_type == "upernet_seg":
         return UperNetSegmentor(backbone, decoder, patch_size=patch_size)
+    elif model_type == "unet_seg":
+        return UNetSegmentor(backbone, decoder)
     elif model_type == "classification":
         return ClassificationModel(backbone, decoder)
     else:

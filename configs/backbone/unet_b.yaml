@@ -1,0 +1,8 @@
+# UNet backbone for the fully-supervised baseline. Trained from scratch,
+# no pretrained weights -- comparison point next to the frozen
+# foundation-model backbones (dofa_b, carl, panopticon_b, ...).
+_target_: src.backbones.unet_backbone.UNetBackbone
+in_chans: ${sensor.num_bands}  # dynamically set from sensor config
+topology: [64, 128, 256, 512]
+img_size: ${sensor.img_size}
+name: unet_b

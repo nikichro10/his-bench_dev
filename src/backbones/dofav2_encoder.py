@@ -51,6 +51,7 @@ class DOFAv2_Encoder(Encoder):
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
         sensor: str = "enmap",
         sensor_config_name: Optional[str] = None,
+        reinit_weight_generator: bool = False,
     ):
         super().__init__(
             model_name="dofav2_encoder",
@@ -69,6 +70,7 @@ class DOFAv2_Encoder(Encoder):
         self.img_size = input_size
         self.patch_size = patch_size
         self.wave_list = wave_list
+        self.reinit_weight_generator = reinit_weight_generator
         self.use_norm = use_norm
         self.sensor = str(sensor_config_name or sensor).lower()
         if self.wave_list is not None:
@@ -211,6 +213,16 @@ class DOFAv2_Encoder(Encoder):
         if not wv_list:
             raise ValueError("No wavelengths remain after filtering to available data bands.")
         self.wv_list = wv_list
+
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        """Overridden so the reinit-hypernetwork ablation reinitializes
+        patch_embed's weight-generator AFTER any pretrained weights land --
+        see DOFA_Encoder.load_state_dict's docstring (Dynamic_MLP_OFA /
+        reinit_hypernetwork() are shared with DOFA v1, imported directly)."""
+        result = super().load_state_dict(state_dict, *args, **kwargs)
+        if self.reinit_weight_generator:
+            self.patch_embed.reinit_hypernetwork()
+        return result
 
     def load_encoder_weights(self, logger: Logger) -> None:
         pretrained_model = torch.load(self.encoder_weights, map_location="cpu", weights_only=False)
