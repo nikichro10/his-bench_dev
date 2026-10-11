@@ -1,99 +1,117 @@
-# SpectralEarth-MM Research Codebase
+# Benchmarking Any-Sensor Foundation Models on Hyperspectral Data
 
-This is the broader SpectralEarth-MM research codebase. It keeps the multisensor SpectralEarth-FM code, selected single-sensor SSL baselines, and comparison backbones for HSI foundation-model experiments.
+Code for the hyperspectral experiments of the Master's thesis
+*Benchmarking Any-Sensor Foundation Models for Earth Observation*
+(Niklas Chromik, OTH Regensburg, 2026).
 
-## Figures
+The thesis evaluates sensor-agnostic foundation models, which accept an arbitrary set of spectral
+bands together with their wavelength metadata, under a single frozen-encoder protocol. This
+repository covers Chapter 5.2: it tests whether these models, pretrained mostly on multispectral
+data, still produce useful features for hyperspectral imagery with hundreds of narrow bands, and
+how much they rely on the bands and wavelength metadata they receive.
 
-Paper overview:
+The multispectral and SAR experiments (Chapter 5.1) live in the companion repository
+[pangaea-bench-dev-nc](https://github.com/nikichro10/pangaea-bench-dev-nc).
+This repository builds on the SpectralEarth-FM codebase, since PANGAEA has no infrastructure
+for hyperspectral data.
 
-![Paper overview](visual_abstract.png)
+## Tasks
 
-Dataset map:
+Nine semantic segmentation tasks across four hyperspectral sensors:
 
-![Dataset map](spectral_earth_mm_map.png)
+| Task | Sensor | Experiment config |
+|---|---|---|
+| CDL, EuroCrops, BD-Forêt, TreeMap, BNETD, NLCD | EnMAP | `configs/experiment/downstream/{cdl,eurocrops,bdforet,treemap,bnetd,nlcd}` |
+| DESIS-CDL | DESIS | `configs/experiment/downstream/desis_cdl` |
+| EO1-CDL | EO-1 Hyperion | `configs/experiment/downstream/eo1_cdl` |
+| OxHyperMinerals (10 % split) | EMIT | `configs/experiment/downstream/oxhyperminerals_emit_l2a` |
 
-Dataset examples:
+Split files are in `data/splits/`, normalization statistics in `data/stats/` and per-sensor
+wavelength metadata in `configs/sensor/`.
 
-![Samples](se_mm_samples.png)
+## Models
 
-Architecture:
+| Thesis name | Backbone key | Patch size | Notes |
+|---|---|---|---|
+| DOFA | `dofa_b` | 16 | Hypernetwork |
+| DOFA+ | `dofav2_b` | 14 | Hypernetwork |
+| Copernicus-FM | `copernicus_fm_b` | 16 | Hypernetwork |
+| Panopticon | `panopticon_b` | 14 | Cross-attention |
+| CARL | `carl` | 8 | Cross-attention, image-wise normalization only |
+| SpecAware | `specaware_b` | 8 | Hyperspectral-specific hypernetwork baseline |
+| SpecViT-p8-Frozen / SpecViT-p16-Frozen | `spec_vit_b_p8` / `spec_vit_b_p16` | 8 / 16 | Random init, frozen |
+| ViT-p16-Frozen / ViT-p8-Frozen | `vit_b` / `vit_b_p8` | 16 / 8 | Random init, frozen |
+| ViT-p16-Sup | `vit_b_finetune` | 16 | Trained end-to-end |
 
-![SpectralEarth-FM architecture](spectralearth_fm_arch.png)
+All models use the base size and an input size of 224 px, with the same patch sizes as in the
+multispectral experiments. Checkpoints are expected under
+`pretrained_models/comparison/{dofa_b,dofav2_b,copernicus_fm_b,panopticon,carl,specaware}/`.
+The header of `scripts/downstream/run_pangaea_consistency_cdl.sh` lists the download sources and
+how each backbone's weights are loaded.
 
-Pretraining objective:
-
-![SpectralEarth-FM pretraining objective](spectralearth_fm_objective.png)
-
-## Included Model Families
-
-- SpectralEarth-FM multisensor Hiera backbone with grouped HSI spectral tokenization and projected-attention sensor fusion.
-- Multimodal LeJEPA pretraining for SpectralEarth-MM.
-- Single-sensor SSL baselines: DINO, DINOv2, MAE, MoCo, I-JEPA, and LeJEPA.
-- HSI and EO comparison backbones: SpecViT, SpecResNet, DOFA, Panopticon, HyperSIGMA, CARL, SpecAware, ViT/timm, and ResNet/timm.
-
-Removed development-only families include SSMAE, structured masking MAE, factorized/spectral-spatial prototype ViTs, single-sensor Hiera experiment variants, multimodal DINO/I-JEPA/MAE/SSMAE, and Qingpu AMMIS task code.
-
-## Paths
-
-The cluster path profiles are intentionally kept. Useful profiles:
-
-```bash
-paths=juwels
-paths=default
-```
-
-Key locations:
-
-```bash
-configs/paths/juwels.yaml
-configs/paths/default.yaml
-logs/ssl_pretrain_terrabyte/
-pretrained_models/comparison/
-data/stats/mm_full_flat_normalized_random_single/
-```
-
-Install the main Python dependencies with:
+## Setup
 
 ```bash
-micromamba create -n spectral_earth_mm python=3.11
-micromamba activate spectral_earth_mm
+micromamba create -n hsi-bench python=3.11
+micromamba activate hsi-bench
 pip install -r requirements.txt
 ```
 
-The default runs use W&B or CSV logging.
+Cluster path profiles are selected with `paths=<profile>` (`configs/paths/default.yaml`,
+`juwels.yaml`, `jureca.yaml`).
 
-## Main Scripts
+## Running an experiment
 
-Pretraining:
-
-```bash
-bash scripts/pretrain/run_pretrain.sh
-bash scripts/pretrain/run_dino_pretrain.sh
-bash scripts/pretrain/run_dino_v2_pretrain.sh
-bash scripts/pretrain/run_mae_pretrain.sh
-bash scripts/pretrain/run_moco_pretrain.sh
-bash scripts/pretrain/run_ijepa_pretrain.sh
-bash scripts/pretrain/run_lejepa_pretrain.sh
-```
-
-Downstream evaluation:
+All runs go through `src/train.py` with the `downstream` Hydra config. The launch scripts build the
+full command per task and backbone, including backbone-specific weight loading, normalization and
+decoder taps, and submit it to SLURM via the submitit launcher:
 
 ```bash
-bash scripts/downstream/run_benchmark_multisensor_hiera.sh
-bash scripts/downstream/run_paper_network_path_ablations.sh
-bash scripts/downstream/run_benchmark_joint_fusion_hiera.sh
-bash scripts/downstream/run_competitor_benchmarks.sh
-bash scripts/downstream/run_baseline.sh
+# all tasks and backbones
+bash scripts/downstream/run_pangaea_consistency_mlp_fusion.sh
+
+# a subset
+TASKS_CSV=eurocrops BACKBONES_CSV=carl,panopticon_b bash scripts/downstream/run_pangaea_consistency_mlp_fusion.sh
 ```
 
-Dataset roots, split files, wavelength metadata, and normalization statistics are configured under `configs/`, `data/`, and `configs/sensor/`. The retained scripts assume those assets already exist on the cluster paths.
+Runs that already have a saved checkpoint are skipped; set `FORCE_RESUBMIT=true` to rerun them.
 
-Quick CPU check for the multisensor downstream script:
+Protocol used in the thesis: frozen encoder, MLPFusion decoder, AdamW (lr 1e-4, weight decay 0.05),
+cosine annealing learning rate schedule, batch size 8, 80 epochs, checkpoint with the lowest
+validation loss used for testing. This differs from the PANGAEA protocol of the multispectral
+experiments in two points: PANGAEA decays the learning rate in two steps and selects the
+checkpoint by validation mIoU.
 
-```bash
-PYTHON_BIN=/p/project1/hai_ssr_msi/aitalibraham1/micromamba/envs/spectral_earth_mm_review_test/bin/python \
-LOGGER=csv ACCELERATOR=cpu STRATEGY=auto PRECISION=32-true \
-SYNC_BATCHNORM=false FAST_DEV_RUN=true DEVICES=1 NUM_WORKERS=0 BATCH_SIZE=1 \
-TRAIN=false TEST=false TASKS_CSV=cdl \
-bash scripts/downstream/run_benchmark_multisensor_hiera.sh
-```
+## Reproducing the thesis results
+
+| Thesis | Scripts (`scripts/downstream/`) | Analysis (`notebooks/`) |
+|---|---|---|
+| Table 13: main results (EnMAP, DESIS, EO-1 tasks) | `run_pangaea_consistency_mlp_fusion.sh` | `benchmark_results.ipynb` |
+| Table 13: main results (OxHyperMinerals) | `run_oxhyperminerals_mlpfusion.sh` | `benchmark_results.ipynb` |
+| Figure 20: random band subsets (3 to 20 bands vs. all) | `run_vit_s_small_band_ablation.sh` (ViT-S draw selection), `run_small_band_ablation.sh` | `small_band_ablation_results.ipynb` → `figures/*_band_count_bars.pdf` |
+| Figure 21: corrupted wavelength metadata (jitter, permutation, constant) | `run_wrong_wavelength_ablation.sh` | `wrong_wavelength_ablation_results.ipynb` → `figures/*_wrong_wavelength_bars.pdf` |
+
+Figures 20 and 21 cover OxHyperMinerals, EuroCrops and BD-Forêt. The band subsets and corrupted
+wavelengths passed to each run are printed by `print_small_band_overrides.py` and
+`print_wrong_wavelength_overrides.py`.
+
+The notebooks read results from the experiment root
+`/dss/dsstbyfs02/pn49cu/pn49cu-dss-0001/niklas/experiments/hsi-bench`. The scripts contain the
+cluster paths and SLURM settings of the LRZ Terrabyte cluster used for the thesis; adjust
+`DISK_LOG_ROOT`, the path profile and the SLURM account for another environment.
+
+`run_pangaea_consistency_cdl.sh` and `run_oxhyperminerals_upernet.sh` run the same benchmark with the
+UPerNet decoder. These runs are not reported in the thesis.
+
+## Other code in this repo
+
+- `scripts/downstream/additional_experiments/` and `notebooks/additional_experiments/` hold further
+  exploratory ablations (semantic vs. random band groups, UniverSat-B variants, hypernetwork
+  re-initialization, UNet baseline) that are not part of the thesis results.
+- `scripts/pretrain/` and the SpectralEarth-FM / Hiera multisensor backbone code belong to a separate
+  project (self-supervised pretraining of a different model family) and are not used for this benchmark.
+
+## Acknowledgements
+
+This code builds on the SpectralEarth-FM codebase. The comparison backbones are adapted from the
+original implementations of the respective models. The experiments were run on the LRZ Terrabyte cluster.
